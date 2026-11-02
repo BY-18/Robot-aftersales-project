@@ -1,0 +1,9 @@
+2026-10-30 09:48:32.780 | ERROR   | TR-DEMO-0001 | __main__:<module>:10 - 演示异常：应当只落 error.log
+Traceback (most recent call last):
+  File "<string>", line 8, in <module>
+ZeroDivisionError: division by zero
+2026-10-30 10:10:00.989 | ERROR   | TR-f36bea2ffba8 | src.agents.nodes:rag_diagnose_node:427 - [node:rag_diagnose] 手册检索失败：Storage folder C:\Users\BY\PycharmProjects\Robot\qdrant_local_data is already accessed by another instance of Qdrant client. If you require concurrent access, use Qdrant server instead.
+2026-10-30 10:11:03.065 | ERROR   | TR-07061012d0c9 | src.agents.nodes:rag_diagnose_node:427 - [node:rag_diagnose] 手册检索失败：Storage folder C:\Users\BY\PycharmProjects\Robot\qdrant_local_data is already accessed by another instance of Qdrant client. If you require concurrent access, use Qdrant server instead.
+2026-10-30 10:13:20.281 | ERROR   | TR-f808ab8ea14c | src.agents.nodes:rag_diagnose_node:427 - [node:rag_diagnose] 手册检索失败：Storage folder C:\Users\BY\PycharmProjects\Robot\qdrant_local_data is already accessed by another instance of Qdrant client. If you require concurrent access, use Qdrant server instead.
+2026-10-30 10:14:54.041 | ERROR   | TR-7e9ac147752e | src.agents.nodes:rag_diagnose_node:427 - [node:rag_diagnose] 手册检索失败：Storage folder C:\Users\BY\PycharmProjects\Robot\qdrant_local_data is already accessed by another instance of Qdrant client. If you require concurrent access, use Qdrant server instead.
+2026-10-30 10:21:25.962 | ERROR   | TR-875855bd8a5a | src.agents.nodes:rag_diagnose_node:427 - [node:rag_diagnose] 手册检索失败：Storage folder C:\Users\BY\PycharmProjects\Robot\qdrant_local_data is already accessed by another instance of Qdrant client. If you require concurrent access, use Qdrant server instead.

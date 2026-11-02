@@ -1,0 +1,43 @@
+# =============================================================================
+# Service Copilot —— 机器人售后排障与备件智能调度智能体
+# 第一阶段（MVP 骨架）依赖清单
+#
+# 设计原则：全栈云端推理 + 本地文件持久化
+#   * 大语言模型：DeepSeek 云端 API（通过 langchain-openai 的 OpenAI 兼容协议调用）
+#   * 向量模型  ：云端 Embedding API（同样走 OpenAI 兼容协议）
+#   * 向量库    ：Qdrant 官方客户端「本地文件模式」（path=./qdrant_local_data）
+#   * 状态持久化：LangGraph SqliteSaver（checkpoints.sqlite）
+#   * 不使用 Docker / Redis
+#
+# ！！！禁止引入的依赖（会导致数百 MB ~ 数 GB 的本地模型下载）：
+#   torch / torchvision / transformers / sentence-transformers / optimum /
+#   accelerate / FlagEmbedding / text2vec 等任何本地推理框架
+# =============================================================================
+
+# ---------- Web 服务与接入层 ----------
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+
+# ---------- 智能体编排与 LLM 接入 ----------
+langgraph>=0.2.0
+langchain>=0.2.0
+langchain-openai>=0.1.0
+# LangGraph 检查点持久化（HITL 断点续跑）。缺失时 graph.py 会自动回退到内置 MemorySaver
+langgraph-checkpoint-sqlite>=2.0.0
+
+# ---------- 关系型数据库（ERP 库存 / 工单） ----------
+SQLAlchemy>=2.0.0
+PyMySQL>=1.1.0
+# MySQL 8 默认 caching_sha2_password 认证需要该库，缺了会报 "cryptography is required"
+cryptography>=42.0.0
+
+# ---------- 向量数据库（本地文件模式，无需服务端） ----------
+qdrant-client>=1.9.0
+
+# ---------- 配置 / 校验 / 日志 ----------
+pydantic-settings>=2.2.0
+loguru>=0.7.0
+
+# ---------- 测试与数据打桩（仅在跑 scripts/ 下的脚本时需要） ----------
+# scripts/seed_mock_data.py 用它生成设备 / 备件 / 工单的模拟数据
+Faker>=25.0.0

@@ -1,0 +1,1319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Service Copilot · 机器人售后排障与备件调度控制台</title>
+
+<!-- Tailwind CSS：CDN 方式引入，无需构建步骤 -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // Play CDN 的主题扩展。CDN 不可达（车间隔离内网）时这里会抛 ReferenceError，
+  // 被 try/catch 兜住——页面骨架由下方内置 CSS 支撑，不会白屏。
+  try {
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: '#04080f',
+            panel: '#0a1421',
+            edge: '#173049',
+            cyanx: '#22d3ee',
+          },
+          fontFamily: {
+            mono: ['JetBrains Mono', 'Cascadia Mono', 'Consolas', 'ui-monospace', 'monospace'],
+          },
+        },
+      },
+    };
+  } catch (err) {
+    /* 样式降级，功能不受影响 */
+  }
+</script>
+
+<style>
+  /* =========================================================================
+     结构与外观底座
+     · 双栏骨架放在这里（而非交给 Tailwind），保证 CDN 不可达时页面依然可用
+     · 视觉细节（颜色/间距/字号）交给 Tailwind 工具类
+     ========================================================================= */
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1200px 620px at 82% -12%, rgba(34, 211, 238, .10), transparent 62%),
+      radial-gradient(900px 520px at 8% 110%, rgba(56, 189, 248, .07), transparent 60%),
+      #04080f;
+    color: #cbd5e1;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+  }
+
+  /* 细网格底纹，工业风必备的“示波器”质感 */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(56, 189, 248, .045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(56, 189, 248, .045) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(circle at 50% 40%, #000 30%, transparent 88%);
+    z-index: 0;
+  }
+
+  .app {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100vh;
+  }
+
+  .shell {
+    display: grid;
+    grid-template-columns: minmax(370px, 430px) minmax(0, 1fr);
+    gap: 14px;
+    padding: 0 14px 14px;
+    min-height: 0;
+  }
+
+  .col {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: linear-gradient(180deg, rgba(10, 20, 33, .92), rgba(6, 13, 22, .92));
+    border: 1px solid rgba(34, 211, 238, .16);
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(2, 8, 20, .55), inset 0 1px 0 rgba(148, 163, 184, .06);
+    overflow: hidden;
+  }
+
+  .card--grow { flex: 1 1 auto; min-height: 0; }
+  .card--fit { flex: 0 0 auto; }
+
+  .card-hd {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 11px 14px;
+    border-bottom: 1px solid rgba(34, 211, 238, .12);
+    background: linear-gradient(90deg, rgba(34, 211, 238, .07), transparent 70%);
+    flex: 0 0 auto;
+  }
+
+  .card-bd {
+    padding: 12px 14px;
+    overflow: auto;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  .card-bd--flush { padding: 0; }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: rgba(10, 20, 33, .6); }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(34, 211, 238, .22);
+    border-radius: 8px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(34, 211, 238, .4); }
+
+  .mono { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace; }
+
+  /* 标题栏左侧的呼吸指示灯 */
+  .dot { width: 7px; height: 7px; border-radius: 999px; display: inline-block; flex: 0 0 auto; }
+  .dot--ok { background: #34d399; box-shadow: 0 0 0 0 rgba(52, 211, 153, .7); animation: pulse 2.4s infinite; }
+  .dot--bad { background: #f43f5e; box-shadow: 0 0 10px rgba(244, 63, 94, .8); }
+  .dot--idle { background: #64748b; }
+
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, .55); }
+    70% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+  }
+
+  /* ---------------- 智能体推理流（时间线） ---------------- */
+  .tl { display: flex; flex-direction: column; gap: 10px; }
+
+  .tl-item {
+    position: relative;
+    padding: 10px 12px 10px 40px;
+    border: 1px solid rgba(148, 163, 184, .14);
+    border-left: 2px solid rgba(34, 211, 238, .5);
+    border-radius: 10px;
+    background: rgba(8, 16, 27, .72);
+    animation: slideIn .22s ease-out both;
+  }
+
+  .tl-item--pending { border-left-color: rgba(251, 191, 36, .8); }
+  .tl-item--ok { border-left-color: rgba(52, 211, 153, .8); }
+  .tl-item--bad { border-left-color: rgba(244, 63, 94, .85); }
+
+  .tl-idx {
+    position: absolute;
+    left: 10px; top: 11px;
+    width: 20px; height: 20px;
+    display: grid; place-items: center;
+    font-size: 10px; font-weight: 700;
+    color: #22d3ee;
+    border: 1px solid rgba(34, 211, 238, .45);
+    border-radius: 6px;
+    background: rgba(34, 211, 238, .08);
+  }
+
+  .tl-item--pending .tl-idx { color: #fbbf24; border-color: rgba(251, 191, 36, .5); background: rgba(251, 191, 36, .1); }
+  .tl-item--ok .tl-idx { color: #34d399; border-color: rgba(52, 211, 153, .5); background: rgba(52, 211, 153, .1); }
+  .tl-item--bad .tl-idx { color: #fb7185; border-color: rgba(244, 63, 94, .5); background: rgba(244, 63, 94, .1); }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ---------------- 富文本（SOP / 报告）渲染 ---------------- */
+  .rich { font-size: 12.5px; line-height: 1.66; }
+  .rich-title { color: #67e8f9; font-weight: 700; letter-spacing: .02em; }
+  .rich-h { color: #7dd3fc; font-weight: 700; margin-top: 7px; }
+  .rich-hit { color: #fbbf24; font-weight: 600; margin-top: 5px; }
+  .rich-table { white-space: pre-wrap; color: #93a4bb; font-size: 11.5px; }
+  .rich-kv { padding-left: 8px; }
+  .rich-key { color: #64748b; }
+  .rich-val { color: #d5deea; }
+  .rich-li { padding-left: 8px; color: #d5deea; }
+  .rich-p { color: #b6c2d2; }
+  .rich-gap { height: 6px; }
+
+  /* ---------------- 状态徽章 ---------------- */
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 7px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+    border: 1px solid transparent; white-space: nowrap;
+  }
+  .badge--pending { color: #fbbf24; background: rgba(251, 191, 36, .12); border-color: rgba(251, 191, 36, .4); }
+  .badge--ok { color: #34d399; background: rgba(52, 211, 153, .12); border-color: rgba(52, 211, 153, .4); }
+  .badge--bad { color: #fb7185; background: rgba(244, 63, 94, .12); border-color: rgba(244, 63, 94, .4); }
+  .badge--idle { color: #94a3b8; background: rgba(148, 163, 184, .1); border-color: rgba(148, 163, 184, .3); }
+  .badge--cyan { color: #22d3ee; background: rgba(34, 211, 238, .1); border-color: rgba(34, 211, 238, .35); }
+
+  /* ---------------- 数据表 ---------------- */
+  table.grid { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.grid thead th {
+    position: sticky; top: 0; z-index: 2;
+    text-align: left; font-weight: 600; font-size: 10.5px;
+    letter-spacing: .06em; text-transform: uppercase;
+    color: #7c8ba1;
+    padding: 9px 12px;
+    background: #0a1522;
+    border-bottom: 1px solid rgba(34, 211, 238, .16);
+    white-space: nowrap;
+  }
+  table.grid tbody td {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, .08);
+    vertical-align: middle;
+  }
+  table.grid tbody tr:hover { background: rgba(34, 211, 238, .05); }
+
+  /* 核心备件行高亮 */
+  tr.row--core { background: rgba(34, 211, 238, .07); box-shadow: inset 2px 0 0 #22d3ee; }
+
+  /* 库存变动闪烁：审批通过后能一眼看到 3 → 2 */
+  @keyframes flashDown {
+    0% { background: rgba(244, 63, 94, .42); }
+    100% { background: rgba(244, 63, 94, 0); }
+  }
+  @keyframes flashUp {
+    0% { background: rgba(52, 211, 153, .42); }
+    100% { background: rgba(52, 211, 153, 0); }
+  }
+  tr.flash-down { animation: flashDown 1.6s ease-out 2; }
+  tr.flash-up { animation: flashUp 1.6s ease-out 2; }
+
+  /* 库存条 */
+  .qty-bar { height: 4px; border-radius: 999px; background: rgba(148, 163, 184, .18); overflow: hidden; min-width: 46px; }
+  .qty-bar > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #22d3ee, #34d399); }
+
+  /* ---------------- HITL 审批弹层 ---------------- */
+  .overlay {
+    position: fixed; inset: 0; z-index: 60;
+    display: none; align-items: center; justify-content: center;
+    padding: 24px;
+    background: rgba(2, 6, 15, .74);
+    backdrop-filter: blur(6px);
+  }
+  .overlay.is-open { display: flex; }
+
+  @keyframes popIn {
+    from { opacity: 0; transform: scale(.96) translateY(10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  .modal { animation: popIn .22s cubic-bezier(.2, .9, .3, 1) both; }
+
+  .modal-kv { display: grid; grid-template-columns: 84px 1fr; gap: 6px 10px; font-size: 12.5px; }
+  .modal-kv dt { color: #7c8ba1; }
+  .modal-kv dd { margin: 0; color: #e2e8f0; }
+
+  /* ---------------- 按钮 ---------------- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    padding: 9px 14px; border-radius: 9px;
+    font-size: 12.5px; font-weight: 700; letter-spacing: .02em;
+    border: 1px solid transparent; cursor: pointer;
+    transition: transform .12s ease, box-shadow .18s ease, background .18s ease;
+    white-space: nowrap;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn--approve { color: #04140c; background: linear-gradient(180deg, #4ade80, #22c55e); box-shadow: 0 6px 18px rgba(34, 197, 94, .28); }
+  .btn--reject { color: #fff1f2; background: rgba(244, 63, 94, .16); border-color: rgba(244, 63, 94, .55); }
+  .btn--reject:hover { background: rgba(244, 63, 94, .28); }
+  .btn--ghost { color: #cbd5e1; background: rgba(148, 163, 184, .08); border-color: rgba(148, 163, 184, .28); }
+  .btn--ghost:hover { background: rgba(148, 163, 184, .16); }
+
+  /* 通道快捷测试按钮 */
+  .ch-btn {
+    position: relative; overflow: hidden;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+    width: 100%; padding: 11px 13px; border-radius: 11px;
+    text-align: left; cursor: pointer;
+    border: 1px solid rgba(148, 163, 184, .22);
+    background: rgba(12, 22, 36, .8);
+    transition: border-color .18s ease, transform .12s ease, background .18s ease;
+  }
+  .ch-btn:hover { transform: translateY(-1px); }
+  .ch-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+  .ch-btn--a:hover { border-color: rgba(251, 146, 60, .6); background: rgba(251, 146, 60, .09); }
+  .ch-btn--b:hover { border-color: rgba(34, 211, 238, .6); background: rgba(34, 211, 238, .09); }
+
+  .spin { width: 13px; height: 13px; border-radius: 999px; border: 2px solid rgba(226, 232, 240, .28); border-top-color: #e2e8f0; animation: rot .7s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  /* ---------------- Toast ---------------- */
+  #toasts { position: fixed; right: 18px; bottom: 18px; z-index: 70; display: flex; flex-direction: column; gap: 8px; }
+  .toast {
+    min-width: 220px; max-width: 380px;
+    padding: 10px 13px; border-radius: 10px;
+    font-size: 12.5px; color: #e2e8f0;
+    background: rgba(10, 20, 33, .96);
+    border: 1px solid rgba(34, 211, 238, .3);
+    box-shadow: 0 12px 28px rgba(2, 8, 20, .6);
+    animation: slideIn .2s ease-out both;
+  }
+  .toast--ok { border-color: rgba(52, 211, 153, .5); }
+  .toast--bad { border-color: rgba(244, 63, 94, .55); }
+
+  /* 窄屏：单列堆叠，页面可滚动 */
+  @media (max-width: 1080px) {
+    body { overflow: auto; }
+    .app { height: auto; min-height: 100vh; }
+    .shell { grid-template-columns: 1fr; }
+    .card-bd { max-height: 60vh; }
+  }
+</style>
+</head>
+
+<body>
+<div class="app">
+  <!-- ===================== 顶栏 ===================== -->
+  <header class="flex flex-wrap items-center justify-between gap-3 border-b border-cyan-400/15 bg-[#060d17]/85 px-4 py-2.5 backdrop-blur">
+    <div class="flex items-center gap-3">
+      <div class="grid h-9 w-9 place-items-center rounded-lg border border-cyan-400/40 bg-cyan-400/10 shadow-[0_0_18px_rgba(34,211,238,.22)]">
+        <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="#22d3ee" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2.5 20 7v10l-8 4.5L4 17V7z" />
+          <circle cx="12" cy="12" r="2.6" />
+          <path d="M12 6.4v3M12 14.6v3M7.6 9.4l2.2 1.4M14.2 13.2l2.2 1.4M16.4 9.4l-2.2 1.4M9.8 13.2l-2.2 1.4" />
+        </svg>
+      </div>
+      <div class="leading-tight">
+        <div class="flex items-baseline gap-2">
+          <h1 class="mono text-[15px] font-bold tracking-[.14em] text-slate-100">SERVICE COPILOT</h1>
+          <span class="badge badge--cyan mono" id="versionChip">v-</span>
+        </div>
+        <p class="text-[11px] text-slate-500">机器人售后排障与备件智能调度中枢 · 双通道接入 / HITL 审批 / ERP 实时库存</p>
+      </div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2">
+      <!-- 依赖健康度 -->
+      <div class="flex items-center gap-3 rounded-lg border border-slate-600/30 bg-slate-800/25 px-3 py-1.5" id="healthChips">
+        <span class="mono text-[10.5px] text-slate-500">依赖</span>
+        <span class="flex items-center gap-1.5 text-[11px] text-slate-400" data-health="mysql">
+          <i class="dot dot--idle"></i>MySQL
+        </span>
+        <span class="flex items-center gap-1.5 text-[11px] text-slate-400" data-health="qdrant">
+          <i class="dot dot--idle"></i>Qdrant
+        </span>
+        <span class="flex items-center gap-1.5 text-[11px] text-slate-400" data-health="checkpointer">
+          <i class="dot dot--idle"></i>Checkpoint
+        </span>
+      </div>
+
+      <span class="mono text-[12px] tabular-nums text-slate-400" id="clock">--:--:--</span>
+
+      <label class="flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-400" title="每 5 秒刷新右侧看板">
+        <input type="checkbox" id="autoRefresh" class="h-3.5 w-3.5 accent-cyan-400" checked />
+        自动刷新
+      </label>
+
+      <button class="btn btn--ghost !px-2.5 !py-1.5" id="btnRefresh" title="立即刷新看板">
+        <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3.5V9h-5.5" />
+        </svg>
+        刷新
+      </button>
+      <a class="btn btn--ghost !px-2.5 !py-1.5" href="/docs" target="_blank" title="Swagger 接口文档">API 文档</a>
+    </div>
+  </header>
+
+  <!-- ===================== 主体双栏 ===================== -->
+  <div class="shell">
+    <!-- ---------------- 左栏 ---------------- -->
+    <div class="col">
+      <!-- 双通道接入 -->
+      <section class="card card--fit">
+        <div class="card-hd">
+          <h2 class="flex items-center gap-2 text-[12.5px] font-bold tracking-wide text-slate-200">
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round">
+              <path d="M4 7h16M4 12h10M4 17h7" /><circle cx="19" cy="17" r="2" />
+            </svg>
+            双通道故障接入
+          </h2>
+          <span class="badge badge--idle mono">CH-A / CH-B</span>
+        </div>
+        <div class="card-bd space-y-2.5">
+          <button class="ch-btn ch-btn--a" id="btnE201">
+            <span class="flex items-center gap-2">
+              <span class="mono text-[10px] font-bold tracking-widest text-orange-300/90">通道 A</span>
+              <span class="text-[12.5px] font-semibold text-slate-100">模拟人工报修 E-201</span>
+              <span class="badge badge--pending">需换件 + 审批</span>
+            </span>
+            <span class="text-[11px] text-slate-500">苏州 AGV-SZ-003 夹爪漏气 → RAG 命中电磁阀 → 查库存 → 挂起等审批</span>
+          </button>
+
+          <button class="ch-btn ch-btn--b" id="btnE500">
+            <span class="flex items-center gap-2">
+              <span class="mono text-[10px] font-bold tracking-widest text-cyan-300/90">通道 B</span>
+              <span class="text-[12.5px] font-semibold text-slate-100">模拟设备 Webhook 告警 E-500</span>
+              <span class="badge badge--ok">纯复位 · 无需换件</span>
+            </span>
+            <span class="text-[11px] text-slate-500">边缘设备自动上报结构化报文 → 跳过槽位抽取 → 直接出报告</span>
+          </button>
+
+          <div class="rounded-lg border border-slate-600/25 bg-slate-800/20 p-2">
+            <label class="mb-1 block text-[10.5px] font-semibold tracking-wider text-slate-500">自定义报修（自然语言）</label>
+            <div class="flex items-start gap-2">
+              <textarea id="customQuery" rows="2"
+                class="mono w-full resize-none rounded-md border border-slate-600/40 bg-[#050b13] px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-400/60"
+                placeholder="例如：上海厂区 ARM-SH-012 行走时憋停，面板报 E-104，需要换什么件？"></textarea>
+              <button class="btn btn--ghost !px-3 !py-2 !text-[11.5px]" id="btnCustom">提交</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 智能体推理流 -->
+      <section class="card card--grow">
+        <div class="card-hd">
+          <h2 class="flex items-center gap-2 text-[12.5px] font-bold tracking-wide text-slate-200">
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l2.5 2.5M16.5 16.5 19 19M19 5l-2.5 2.5M7.5 16.5 5 19" />
+            </svg>
+            智能体执行轨迹
+          </h2>
+          <span class="mono text-[10.5px] text-slate-500" id="tlMeta">待命</span>
+        </div>
+        <div class="card-bd" id="timeline">
+          <div class="flex h-full flex-col items-center justify-center gap-2 py-10 text-center" id="tlEmpty">
+            <svg viewBox="0 0 24 24" class="h-9 w-9 text-slate-700" fill="none" stroke="currentColor" stroke-width="1.4">
+              <path d="M4 6h16M4 12h16M4 18h10" stroke-linecap="round" />
+            </svg>
+            <p class="text-[12px] text-slate-500">点击上方任一通道按钮发起一次故障接入</p>
+            <p class="mono text-[10.5px] text-slate-600">推理流将实时呈现：槽位抽取 → 手册检索 → 备件判定 → 库存调度 → HITL</p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ---------------- 右栏 ---------------- -->
+    <div class="col">
+      <!-- 备件库存 -->
+      <section class="card card--grow">
+        <div class="card-hd">
+          <h2 class="flex items-center gap-2 text-[12.5px] font-bold tracking-wide text-slate-200">
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="#34d399" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 9.5 12 4l9 5.5v9L12 24l-9-5.5z" transform="translate(0,-2)" /><path d="M3 8.5 12 14l9-5.5M12 14v8" transform="translate(0,-2)" />
+            </svg>
+            ERP 备件实时库存
+          </h2>
+          <div class="flex items-center gap-2">
+            <input id="partFilter" placeholder="按备件名筛选…"
+              class="mono w-40 rounded-md border border-slate-600/40 bg-[#050b13] px-2 py-1 text-[11px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-emerald-400/60" />
+            <span class="mono text-[10.5px] text-slate-500" id="partMeta">-</span>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5 border-b border-slate-600/20 bg-slate-800/15 px-3 py-1.5">
+          <span class="text-[10.5px] text-slate-500">快捷筛选</span>
+          <button class="badge badge--cyan" data-part="型号A电磁阀">型号A电磁阀</button>
+          <button class="badge badge--cyan" data-part="400W交流伺服电机">400W伺服电机</button>
+          <button class="badge badge--cyan" data-part="360度安全激光雷达">安全激光雷达</button>
+          <button class="badge badge--idle" data-part="">全部</button>
+          <span class="ml-auto text-[10.5px] text-slate-600">审批通过后本表库存应 −1</span>
+        </div>
+        <div class="card-bd card-bd--flush">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>备件名称</th><th>物料编码</th><th>仓库 / 货位</th><th>可用库存</th><th>单价</th><th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody id="partsBody">
+              <tr><td colspan="6" class="py-8 text-center text-[12px] text-slate-600">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 工单流转 -->
+      <section class="card card--grow">
+        <div class="card-hd">
+          <h2 class="flex items-center gap-2 text-[12.5px] font-bold tracking-wide text-slate-200">
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 3h8a2 2 0 0 1 2 2v16l-3-2-3 2-3-2-3 2V5a2 2 0 0 1 2-2z" /><path d="M9.5 8h5M9.5 12h5" />
+            </svg>
+            工单流转看板
+          </h2>
+          <span class="mono text-[10.5px] text-slate-500" id="orderMeta">-</span>
+        </div>
+        <div class="card-bd card-bd--flush">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>工单号</th><th>设备 SN</th><th>故障码</th><th>建议备件</th><th>出库仓</th><th>审批</th><th>派工</th><th>创建时间</th>
+              </tr>
+            </thead>
+            <tbody id="ordersBody">
+              <tr><td colspan="8" class="py-8 text-center text-[12px] text-slate-600">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== HITL 审批弹层 ===================== -->
+<div class="overlay" id="approvalOverlay">
+  <div class="modal w-full max-w-xl overflow-hidden rounded-2xl border border-amber-400/35 bg-[#08121e] shadow-[0_24px_70px_rgba(0,0,0,.75)]">
+    <div class="flex items-start justify-between gap-3 border-b border-amber-400/25 bg-amber-400/[.07] px-5 py-3.5">
+      <div class="flex items-center gap-2.5">
+        <span class="grid h-8 w-8 place-items-center rounded-lg border border-amber-400/50 bg-amber-400/15">
+          <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 9v4M12 17h.01" /><path d="M10.3 3.6 2.4 17a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z" />
+          </svg>
+        </span>
+        <div>
+          <h3 class="text-[14px] font-bold text-amber-200">HITL 人工审批 · 高价值备件出库</h3>
+          <p class="text-[11px] text-amber-200/60">工作流已挂起（LangGraph interrupt），等待主管结论</p>
+        </div>
+      </div>
+      <button class="text-slate-500 hover:text-slate-300" id="modalClose" title="关闭（工作流仍保持挂起）">
+        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+      </button>
+    </div>
+
+    <div class="px-5 py-4">
+      <dl class="modal-kv">
+        <dt>工单号</dt><dd class="mono text-amber-200" id="moOrder">-</dd>
+        <dt>设备 SN</dt><dd class="mono" id="moDevice">-</dd>
+        <dt>故障码</dt><dd class="mono" id="moCode">-</dd>
+        <dt>申请备件</dt><dd class="font-semibold text-cyan-200" id="moPart">-</dd>
+        <dt>推荐仓库</dt><dd id="moWarehouse">-</dd>
+        <dt>当前库存</dt><dd id="moStock">-</dd>
+        <dt>链路号</dt><dd class="mono text-[11px] text-slate-400" id="moTrace">-</dd>
+      </dl>
+
+      <div class="mt-3 rounded-lg border border-slate-600/30 bg-slate-800/30 p-2.5">
+        <p class="text-[11.5px] leading-relaxed text-slate-400">
+          批准后将执行：<span class="text-emerald-300">核销 1 件库存</span> + 工单置
+          <span class="mono text-emerald-300">DISPATCHED</span>；
+          驳回则置 <span class="mono text-rose-300">CLOSED</span>，库存不动。
+        </p>
+      </div>
+
+      <div class="mt-3 flex items-center gap-2">
+        <label class="text-[11.5px] text-slate-500" for="approverInput">审批人</label>
+        <input id="approverInput" value="张主管"
+          class="mono w-32 rounded-md border border-slate-600/40 bg-[#050b13] px-2 py-1 text-[11.5px] text-slate-200 outline-none focus:border-cyan-400/60" />
+      </div>
+
+      <p class="mt-3 hidden rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11.5px] text-rose-200" id="moError"></p>
+
+      <!-- 审批中 -->
+      <div class="mt-4 hidden items-center gap-2 text-[12px] text-slate-400" id="moBusy">
+        <i class="spin"></i><span id="moBusyText">正在唤醒工作流…</span>
+      </div>
+
+      <!-- 结果态 -->
+      <div class="mt-4 hidden rounded-lg border border-emerald-400/35 bg-emerald-400/[.08] px-3 py-2.5" id="moDone">
+        <div class="flex items-center gap-2">
+          <span class="badge badge--ok" id="moDoneBadge">DISPATCHED</span>
+          <span class="text-[12px] font-semibold text-emerald-200" id="moDoneTitle">审批已完成</span>
+        </div>
+        <p class="mt-1.5 text-[11.5px] leading-relaxed text-emerald-100/80" id="moDoneDetail"></p>
+      </div>
+
+      <div class="mt-4 flex items-center justify-end gap-2.5" id="moActions">
+        <button class="btn btn--ghost" id="btnModalCancel">稍后再批</button>
+        <button class="btn btn--reject" id="btnReject">
+          <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          驳回
+        </button>
+        <button class="btn btn--approve" id="btnApprove">
+          <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+          批准并扣减库存
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+/* ===========================================================================
+   Service Copilot 控制台前端逻辑（原生 JS，无构建步骤）
+   约定：所有服务端文本一律走 textContent 渲染，不做 innerHTML 插值，避免 XSS
+   =========================================================================== */
+(function () {
+  'use strict';
+
+  var API = '/api/v1';
+  var POLL_MS = 5000;
+
+  // 核心备件（用于表格高亮与库存变动提示）
+  var CORE_PARTS = ['型号A电磁阀', '400W交流伺服电机', '360度安全激光雷达', '绝对值多圈编码器'];
+
+  var state = {
+    task: null,          // 当前挂起的审批任务 { trace_id, order_no, payload }
+    busy: false,         // 是否有请求在途
+    lastStock: {},       // "备件|仓库" -> 数量，用于比对变动
+    stockReady: false,
+    timer: null,
+    elapsed: null,
+  };
+
+  // ---------------------------------------------------------------- DOM 工具
+  function $(sel) { return document.querySelector(sel); }
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function toast(message, kind) {
+    var box = $('#toasts');
+    var item = el('div', 'toast' + (kind ? ' toast--' + kind : ''), message);
+    box.appendChild(item);
+    setTimeout(function () {
+      item.style.transition = 'opacity .3s ease';
+      item.style.opacity = '0';
+      setTimeout(function () { item.remove(); }, 320);
+    }, 4200);
+  }
+
+  function setText(sel, value) {
+    var node = $(sel);
+    if (node) node.textContent = (value === undefined || value === null || value === '') ? '-' : String(value);
+  }
+
+  // ---------------------------------------------------------------- HTTP 封装
+  function api(path, options) {
+    options = options || {};
+    var controller = new AbortController();
+    var timeout = setTimeout(function () { controller.abort(); }, options.timeout || 120000);
+    return fetch(API + path, {
+      method: options.method || 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+    }).then(function (res) {
+      return res.text().then(function (raw) {
+        var data = null;
+        try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = { detail: raw }; }
+        if (!res.ok) {
+          var detail = data && data.detail;
+          if (Array.isArray(detail)) {
+            detail = detail.map(function (d) { return (d.loc || []).join('.') + ' ' + (d.msg || ''); }).join('; ');
+          }
+          throw new Error(detail || ('HTTP ' + res.status));
+        }
+        return data;
+      });
+    }).catch(function (err) {
+      if (err && err.name === 'AbortError') throw new Error('请求超时（后端可能正在等待大模型返回）');
+      throw err;
+    }).finally(function () { clearTimeout(timeout); });
+  }
+
+  // ------------------------------------------------------- 富文本（SOP / 报告）
+  function renderRichText(text) {
+    var box = el('div', 'rich');
+    String(text || '').split('\n').forEach(function (raw) {
+      var line = raw.replace(/\s+$/, '');
+      if (!line.trim()) { box.appendChild(el('div', 'rich-gap')); return; }
+
+      var trimmed = line.trim();
+      if (/^【.*】$/.test(trimmed)) { box.appendChild(el('div', 'rich-title', trimmed)); return; }
+      if (/^#{1,6}\s/.test(trimmed)) { box.appendChild(el('div', 'rich-h', trimmed.replace(/^#{1,6}\s*/, ''))); return; }
+      if (/^\[命中\s*\d+\]/.test(trimmed)) { box.appendChild(el('div', 'rich-hit', trimmed)); return; }
+      if (trimmed.charAt(0) === '|') { box.appendChild(el('div', 'rich-table', trimmed)); return; }
+
+      var kv = line.match(/^\s*-\s+([^：:]{1,26})[：:]\s*([\s\S]*)$/);
+      if (kv) {
+        var row = el('div', 'rich-kv');
+        row.appendChild(el('span', 'rich-key', '- ' + kv[1] + '：'));
+        row.appendChild(el('span', 'rich-val', kv[2]));
+        box.appendChild(row);
+        return;
+      }
+      if (/^\s*-\s+/.test(line)) { box.appendChild(el('div', 'rich-li', line.replace(/^\s*-\s+/, '• '))); return; }
+      box.appendChild(el('div', 'rich-p', line));
+    });
+    return box;
+  }
+
+  // ------------------------------------------------------------- 时间线渲染
+  var stepSeq = 0;
+
+  function resetTimeline() {
+    var box = $('#timeline');
+    box.textContent = '';
+    stepSeq = 0;
+    setText('#tlMeta', '执行中…');
+  }
+
+  /**
+   * 追加一个执行轨迹步骤。
+   * @param {string} title 步骤标题
+   * @param {string} tone  '' | 'pending' | 'ok' | 'bad'
+   * @param {Node|string} body 正文（富文本节点或纯文本）
+   */
+  function addStep(title, tone, body) {
+    stepSeq += 1;
+    var item = el('div', 'tl-item' + (tone ? ' tl-item--' + tone : ''));
+    item.appendChild(el('span', 'tl-idx', stepSeq < 10 ? '0' + stepSeq : String(stepSeq)));
+    item.appendChild(el('div', 'mb-1 text-[12px] font-bold tracking-wide text-slate-200', title));
+
+    var bodyBox = el('div', 'text-slate-400');
+    if (body instanceof Node) bodyBox.appendChild(body);
+    else if (body) bodyBox.appendChild(el('div', 'rich-p', body));
+    item.appendChild(bodyBox);
+
+    var box = $('#timeline');
+    box.appendChild(item);
+    box.scrollTop = box.scrollHeight;
+    return item;
+  }
+
+  /** 键值对块 */
+  function kvBlock(pairs) {
+    var wrap = el('div', 'grid gap-x-3 gap-y-1 text-[12px]');
+    wrap.style.gridTemplateColumns = 'max-content 1fr';
+    pairs.forEach(function (pair) {
+      if (pair[1] === undefined || pair[1] === null || pair[1] === '') return;
+      wrap.appendChild(el('span', 'text-slate-500', pair[0]));
+      var val = el('span', 'mono break-all text-slate-200', pair[1]);
+      if (pair[2]) val.className += ' ' + pair[2];
+      wrap.appendChild(val);
+    });
+    return wrap;
+  }
+
+  /** 库存表（左右两栏都为紧凑表格） */
+  function stockTable(rows) {
+    if (!rows || !rows.length) return el('div', 'rich-p', '全部仓库无可用库存 → 触发缺货预警');
+    var table = el('table', 'grid');
+    var thead = el('thead');
+    var hr = el('tr');
+    ['仓库', '城市', '可用', '货位', '就近'].forEach(function (t) { hr.appendChild(el('th', '', t)); });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+
+    var tbody = el('tbody');
+    rows.forEach(function (row) {
+      var tr = el('tr');
+      if (row.is_preferred_location) tr.className = 'row--core';
+      tr.appendChild(el('td', 'text-slate-200', row.warehouse_name || '-'));
+      tr.appendChild(el('td', 'text-slate-400', row.warehouse_location || '-'));
+      tr.appendChild(el('td', 'mono font-bold text-emerald-300', row.stock_quantity));
+      tr.appendChild(el('td', 'mono text-slate-400', row.bin_location || '-'));
+      tr.appendChild(el('td', '', row.is_preferred_location ? '优先' : '备选'));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    return table;
+  }
+
+  // ------------------------------------------------------------- 诊断请求
+  function setBusy(flag) {
+    state.busy = flag;
+    ['#btnE201', '#btnE500', '#btnCustom'].forEach(function (sel) {
+      var btn = $(sel);
+      if (btn) btn.disabled = flag;
+    });
+  }
+
+  function renderDiagnose(data) {
+    var channelLabel = data.channel === 'webhook_alert' ? '通道 B · 设备 Webhook 告警' : '通道 A · 人工口语报修';
+
+    // 01 接入
+    addStep('接入与追踪', '', kvBlock([
+      ['通道', channelLabel],
+      ['trace_id', data.trace_id, 'text-cyan-300'],
+      ['耗时', Number(data.elapsed_ms || 0).toFixed(0) + ' ms'],
+    ]));
+
+    // 02 槽位解析
+    addStep('故障解析 · 槽位抽取', '', kvBlock([
+      ['设备 SN', data.device_sn],
+      ['所在城市', data.device_location],
+      ['故障码', data.error_code, 'text-amber-300'],
+      ['现象', data.symptom],
+    ]));
+
+    // 03 RAG
+    addStep('原厂手册检索 · RAG', '', renderRichText(data.sop_guide || '（未返回检索结果）'));
+
+    // 04 备件判定
+    if (data.required_part) {
+      addStep('备件判定 · 需更换', 'pending', kvBlock([
+        ['标准品名', data.required_part, 'text-cyan-300 font-bold'],
+        ['依据', '手册 SOP 判定为换件类故障'],
+      ]));
+    } else {
+      addStep('备件判定 · 无需换件', 'ok', kvBlock([
+        ['结论', '按 SOP 复位 / 调试即可，不生成备件工单'],
+      ]));
+    }
+
+    // 05 库存调度
+    if (data.stock_info && data.stock_info.length) {
+      var wrap = el('div', 'space-y-2');
+      wrap.appendChild(kvBlock([
+        ['推荐仓库', data.selected_warehouse, 'text-emerald-300 font-bold'],
+        ['可调仓数', data.stock_info.length],
+      ]));
+      wrap.appendChild(stockTable(data.stock_info));
+      addStep('多仓就近调度 · Text2SQL', '', wrap);
+    } else if (data.required_part) {
+      addStep('多仓就近调度 · 缺货', 'bad', kvBlock([['结论', '全部仓库无可用库存，需紧急采购/跨区调拨']]));
+    }
+
+    // 06 工单 / HITL
+    if (data.status === 'WAITING_APPROVAL') {
+      addStep('工单草稿已生成 · 工作流挂起', 'pending', kvBlock([
+        ['工单号', data.order_no, 'text-amber-300 font-bold'],
+        ['审批状态', 'PENDING（等待主管审批）'],
+        ['说明', 'LangGraph interrupt 已落检查点，可在右侧看板看到该工单'],
+      ]));
+    } else if (data.order_no) {
+      addStep('工单已结案', 'ok', kvBlock([
+        ['工单号', data.order_no],
+        ['审批状态', data.approval_status],
+      ]));
+    } else {
+      addStep('未生成工单', '', kvBlock([['原因', '本故障无需更换备件']]));
+    }
+
+    // 07 报告
+    if (data.final_response) {
+      var details = el('details', 'group');
+      var summary = el('summary', 'cursor-pointer text-[12px] font-semibold text-cyan-300 hover:text-cyan-200', '查看完整售后处理报告 ▾');
+      details.appendChild(summary);
+      var holder = el('div', 'mt-2 max-h-64 overflow-auto rounded-lg border border-slate-600/25 bg-[#050b13] p-2.5');
+      holder.appendChild(renderRichText(data.final_response));
+      details.appendChild(holder);
+      addStep('处理报告已生成', 'ok', details);
+    }
+
+    setText('#tlMeta', data.status === 'WAITING_APPROVAL' ? '已挂起 · 等待审批' : '已完成');
+  }
+
+  function runDiagnose(kind) {
+    if (state.busy) return;
+    setBusy(true);
+    resetTimeline();
+
+    var request;
+    if (kind === 'e201') {
+      request = api('/diagnose/chat', {
+        method: 'POST',
+        body: { query: '苏州厂区的 AGV-SZ-003 小车夹爪漏气合不上，报 E-201' },
+      });
+    } else if (kind === 'e500') {
+      request = api('/alert/webhook', {
+        method: 'POST',
+        body: {
+          device_sn: 'AGV-SZ-003',
+          location: '苏州',
+          error_code: 'E-500',
+          symptom: '急停按钮被人员误拍下，控制面板报 E-500，需要现场复位',
+        },
+      });
+    } else {
+      var text = ($('#customQuery').value || '').trim();
+      if (!text) { toast('请输入报修内容', 'bad'); setBusy(false); return; }
+      request = api('/diagnose/chat', { method: 'POST', body: { query: text } });
+    }
+
+    // 执行中的占位步骤，让等待有反馈
+    var pending = addStep('智能体执行中…', 'pending', el('div', 'flex items-center gap-2 text-[11.5px] text-slate-500', '正在调用 DeepSeek / Qdrant / MySQL，请稍候'));
+
+    request.then(function (data) {
+      pending.remove();
+      stepSeq -= 1;
+      renderDiagnose(data);
+      if (data.status === 'WAITING_APPROVAL') {
+        openApproval(data);
+        toast('工作流已挂起，请审批工单 ' + data.order_no, 'ok');
+      } else {
+        toast('处理完成：' + (data.required_part ? '无需审批' : '无需换件'));
+      }
+      refreshRight(true);
+    }).catch(function (err) {
+      pending.remove();
+      addStep('执行失败', 'bad', el('div', 'rich-p text-rose-300', err.message));
+      setText('#tlMeta', '失败');
+      toast('执行失败：' + err.message, 'bad');
+    }).finally(function () {
+      setBusy(false);
+    });
+  }
+
+  // ------------------------------------------------------------- HITL 审批
+  function openApproval(data) {
+    state.task = { trace_id: data.trace_id, order_no: data.order_no, payload: data.approval_payload || {} };
+
+    var payload = state.task.payload;
+    var part = payload.required_part || data.required_part || '-';
+    var warehouse = payload.selected_warehouse || data.selected_warehouse || '-';
+    var rows = payload.stock_info || data.stock_info || [];
+    var hit = rows.filter(function (r) { return r.warehouse_name === warehouse; })[0] || rows[0];
+
+    setText('#moOrder', state.task.order_no);
+    setText('#moDevice', payload.device_sn || data.device_sn);
+    setText('#moCode', payload.error_code || data.error_code);
+    setText('#moPart', part);
+    setText('#moWarehouse', warehouse + (hit && hit.bin_location ? '（货位 ' + hit.bin_location + '）' : ''));
+    setText('#moStock', hit ? (hit.stock_quantity + ' 件 → 批准后 ' + Math.max(0, hit.stock_quantity - 1) + ' 件') : '-');
+    setText('#moTrace', state.task.trace_id);
+
+    $('#moError').classList.add('hidden');
+    $('#moBusy').classList.add('hidden');
+    $('#moBusy').classList.remove('flex');
+    $('#moDone').classList.add('hidden');
+    $('#moActions').classList.remove('hidden');
+    $('#btnApprove').disabled = false;
+    $('#btnReject').disabled = false;
+
+    $('#approvalOverlay').classList.add('is-open');
+  }
+
+  function closeApproval() {
+    $('#approvalOverlay').classList.remove('is-open');
+  }
+
+  function setModalBusy(flag, text) {
+    ['#btnApprove', '#btnReject', '#btnModalCancel', '#modalClose'].forEach(function (sel) {
+      var btn = $(sel);
+      if (btn) btn.disabled = flag;
+    });
+    var busy = $('#moBusy');
+    if (flag) {
+      busy.classList.remove('hidden');
+      busy.classList.add('flex');
+      if (text) setText('#moBusyText', text);
+      $('#moError').classList.add('hidden');
+    } else {
+      busy.classList.add('hidden');
+      busy.classList.remove('flex');
+    }
+  }
+
+  function showModalError(message) {
+    var node = $('#moError');
+    node.textContent = '审批失败：' + message;
+    node.classList.remove('hidden');
+  }
+
+  function submitApproval(decision) {
+    var task = state.task;
+    if (!task) { toast('没有待审批的任务', 'bad'); return; }
+
+    setModalBusy(true, decision === 'APPROVED' ? '正在核销库存并派工…' : '正在关闭工单…');
+    api('/work-orders/approve', {
+      method: 'POST',
+      body: {
+        trace_id: task.trace_id,
+        order_no: task.order_no,
+        approval_status: decision,
+        approver: ($('#approverInput').value || '').trim() || '张主管',
+      },
+    }).then(function (result) {
+      setModalBusy(false);
+      state.task = null;
+
+      // 弹层切换为结果态
+      $('#moActions').classList.add('hidden');
+      $('#moDone').classList.remove('hidden');
+      var badge = $('#moDoneBadge');
+      badge.className = 'badge ' + (result.dispatch_status === 'DISPATCHED' ? 'badge--ok' : 'badge--bad');
+      badge.textContent = result.dispatch_status || '-';
+      setText('#moDoneTitle', result.approval_status === 'APPROVED' ? '已批准并派工' : '已驳回，工单关闭');
+      setText('#moDoneDetail',
+        (result.stock_deducted
+          ? '库存已核销 1 件，该仓剩余 ' + result.stock_quantity_after + ' 件。'
+          : '本次未核销库存（驳回 / 或库存已耗尽）。当前库存 ' + (result.stock_quantity_after === null ? '-' : result.stock_quantity_after) + ' 件。')
+        + ' 处理耗时 ' + Number(result.elapsed_ms || 0).toFixed(0) + ' ms。'
+        + (result.replayed ? '（幂等回放：该工作流早已结案，未重复扣减）' : ''));
+
+      // 时间线追加闭环步骤
+      addStep('人工审批闭环', result.approval_status === 'APPROVED' ? 'ok' : 'bad', kvBlock([
+        ['结论', result.approval_status],
+        ['派工状态', result.dispatch_status],
+        ['审批人', result.approver],
+        ['库存变动', result.stock_deducted ? ('核销 1 件 → 剩余 ' + result.stock_quantity_after) : '未变动（剩余 ' + result.stock_quantity_after + '）'],
+      ]));
+      setText('#tlMeta', '已结案 · ' + (result.dispatch_status || ''));
+
+      if (result.final_response) {
+        var details = el('details');
+        details.appendChild(el('summary', 'cursor-pointer text-[12px] font-semibold text-emerald-300', '查看结案报告 ▾'));
+        var holder = el('div', 'mt-2 max-h-56 overflow-auto rounded-lg border border-slate-600/25 bg-[#050b13] p-2.5');
+        holder.appendChild(renderRichText(result.final_response));
+        details.appendChild(holder);
+        addStep('结案报告', 'ok', details);
+      }
+
+      toast(result.approval_status === 'APPROVED' ? '审批通过，库存已核销' : '已驳回，工单关闭',
+        result.approval_status === 'APPROVED' ? 'ok' : 'bad');
+      refreshRight(true);
+    }).catch(function (err) {
+      setModalBusy(false);
+      $('#btnApprove').disabled = false;
+      $('#btnReject').disabled = false;
+      showModalError(err.message);
+    });
+  }
+
+  // ------------------------------------------------------------- 右侧看板
+  var partFilterTimer = null;
+
+  function renderParts(items, total, coreCount) {
+    var body = $('#partsBody');
+    body.textContent = '';
+
+    items = items || [];
+    if (!items.length) {
+      var empty = el('tr');
+      var td = el('td', 'py-8 text-center text-[12px] text-slate-600', '没有匹配的备件库存');
+      td.colSpan = 6;
+      empty.appendChild(td);
+      body.appendChild(empty);
+      setText('#partMeta', '0 行');
+      return;
+    }
+
+    var flashInfo = [];
+
+    items.forEach(function (row) {
+      var tr = el('tr');
+      var key = (row.part_name || '') + '|' + (row.warehouse_name || '');
+      var isCore = CORE_PARTS.indexOf(row.part_name) >= 0;
+      if (isCore) tr.className = 'row--core';
+
+      // 库存变动检测（审批核销后能直观看到 3 → 2）
+      if (state.stockReady && state.lastStock[key] !== undefined && state.lastStock[key] !== row.stock_quantity) {
+        var dir = row.stock_quantity < state.lastStock[key] ? 'flash-down' : 'flash-up';
+        tr.className += ' ' + dir;
+        flashInfo.push(row.part_name + ' @ ' + row.warehouse_name + '：' + state.lastStock[key] + ' → ' + row.stock_quantity);
+      }
+      state.lastStock[key] = row.stock_quantity;
+
+      tr.appendChild(el('td', 'font-semibold text-slate-100', row.part_name || '-'));
+      tr.appendChild(el('td', 'mono text-[11px] text-slate-500', row.part_code || '-'));
+
+      var whTd = el('td');
+      whTd.appendChild(el('div', 'text-slate-300', row.warehouse_name || '-'));
+      whTd.appendChild(el('div', 'mono text-[10.5px] text-slate-500', (row.warehouse_location || '') + ' · ' + (row.bin_location || '-')));
+      tr.appendChild(whTd);
+
+      var qtyTd = el('td');
+      var qtyRow = el('div', 'flex items-center gap-2');
+      var qtyText = el('span', 'mono w-6 text-right text-[12px] font-bold', row.stock_quantity);
+      qtyText.className += row.stock_quantity === 0 ? ' text-rose-400' : (row.stock_quantity <= 5 ? ' text-amber-300' : ' text-emerald-300');
+      qtyRow.appendChild(qtyText);
+      var bar = el('div', 'qty-bar');
+      var fill = el('i');
+      fill.style.width = Math.min(100, Math.max(3, (row.stock_quantity / 50) * 100)) + '%';
+      bar.appendChild(fill);
+      qtyRow.appendChild(bar);
+      qtyTd.appendChild(qtyRow);
+      tr.appendChild(qtyTd);
+
+      tr.appendChild(el('td', 'mono text-[11px] text-slate-400', row.unit_price === null || row.unit_price === undefined ? '-' : '¥' + Number(row.unit_price).toLocaleString()));
+      tr.appendChild(el('td', 'mono text-[10.5px] text-slate-500', row.updated_at || '-'));
+
+      body.appendChild(tr);
+    });
+
+    setText('#partMeta', items.length + '/' + (total || items.length) + ' 行' + (coreCount ? ' · 核心 ' + coreCount : ''));
+    state.stockReady = true;
+
+    if (flashInfo.length) toast('库存变动 · ' + flashInfo.join('；'), 'ok');
+  }
+
+  function renderOrders(data) {
+    var body = $('#ordersBody');
+    body.textContent = '';
+
+    var items = (data && data.items) || [];
+    if (!items.length) {
+      var empty = el('tr');
+      var td = el('td', 'py-8 text-center text-[12px] text-slate-600', '暂无工单，先在上方发起一次 E-201 报修');
+      td.colSpan = 8;
+      empty.appendChild(td);
+      body.appendChild(empty);
+      setText('#orderMeta', '0 条');
+      return;
+    }
+
+    items.forEach(function (row) {
+      var tr = el('tr');
+      tr.appendChild(el('td', 'mono text-[11.5px] font-semibold text-cyan-300', row.order_no));
+      tr.appendChild(el('td', 'mono text-[11.5px]', row.device_sn));
+      tr.appendChild(el('td', 'mono text-[11.5px] text-amber-300', row.error_code || '-'));
+      tr.appendChild(el('td', 'text-[11.5px]', row.suggested_part || '—'));
+
+      var whTd = el('td', 'text-[11.5px] text-slate-400');
+      whTd.textContent = row.allocated_warehouse || '—';
+      tr.appendChild(whTd);
+
+      var approveTd = el('td');
+      var aBadge = el('span', 'badge');
+      if (row.approval_status === 'APPROVED') aBadge.className += ' badge--ok';
+      else if (row.approval_status === 'REJECTED') aBadge.className += ' badge--bad';
+      else aBadge.className += ' badge--pending';
+      aBadge.textContent = row.approval_status || '-';
+      approveTd.appendChild(aBadge);
+      tr.appendChild(approveTd);
+
+      var dispatchTd = el('td');
+      var dBadge = el('span', 'badge');
+      if (row.dispatch_status === 'DISPATCHED') dBadge.className += ' badge--ok';
+      else if (row.dispatch_status === 'CLOSED') dBadge.className += ' badge--bad';
+      else dBadge.className += ' badge--idle';
+      dBadge.textContent = row.dispatch_status || '-';
+      dispatchTd.appendChild(dBadge);
+      tr.appendChild(dispatchTd);
+
+      tr.appendChild(el('td', 'mono text-[10.5px] text-slate-500', row.created_at || '-'));
+
+      body.appendChild(tr);
+    });
+
+    setText('#orderMeta', items.length + '/' + (data.total || items.length) + ' 条');
+  }
+
+  /**
+   * 拉取备件库存。
+   *
+   * 默认视图必须保证「核心易损件」出现在首屏——但 `/spare-parts` 是**先按品名排序再截断**
+   * 的（limit=50），库里 500 多种备件时会话里那几条核心件根本进不了返回窗口，
+   * 前端排序救不回来。因此这里对 4 种核心件各发一次精确查询，合并去重后置顶，
+   * 再用一次全量查询补齐其余行。
+   *
+   * @returns {Promise<void>}
+   */
+  function loadParts() {
+    var filter = ($('#partFilter').value || '').trim();
+
+    // 用户显式筛选：按其条件单一查询即可
+    if (filter) {
+      return api('/spare-parts?limit=200&part_name=' + encodeURIComponent(filter)).then(function (data) {
+        renderParts((data && data.items) || [], (data && data.total) || 0, 0);
+      });
+    }
+
+    var coreQueries = CORE_PARTS.map(function (name) {
+      return api('/spare-parts?limit=20&part_name=' + encodeURIComponent(name))
+        .then(function (d) { return (d && d.items) || []; })
+        .catch(function () { return []; });   // 单个核心件查询失败不应拖垮整张表
+    });
+
+    return Promise.all(coreQueries).then(function (groups) {
+      var core = [];
+      var seen = {};
+      groups.forEach(function (rows, index) {
+        var wanted = CORE_PARTS[index];
+        rows.forEach(function (row) {
+          // 后端的 part_name 是 LIKE 模糊匹配（会把「绝对值多圈编码器-17位」等整个家族
+          // 都带出来），这里必须按精确品名再筛一道，核心区才只有真正的核心件
+          if (row.part_name !== wanted) return;
+          var key = row.part_code || (row.part_name + '|' + row.warehouse_name);
+          if (!seen[key]) { seen[key] = true; core.push(row); }
+        });
+      });
+      return api('/spare-parts?limit=50').then(function (data) {
+        var rest = ((data && data.items) || []).filter(function (row) {
+          var key = row.part_code || (row.part_name + '|' + row.warehouse_name);
+          return !seen[key];
+        });
+        renderParts(core.concat(rest), (data && data.total) || 0, core.length);
+      });
+    });
+  }
+
+  function refreshRight(immediate) {
+    return Promise.all([
+      loadParts().catch(function (err) { setText('#partMeta', '查询失败'); throw err; }),
+      api('/work-orders?limit=12').then(renderOrders).catch(function (err) { setText('#orderMeta', '查询失败'); throw err; }),
+    ]).catch(function (err) {
+      if (immediate) toast('看板刷新失败：' + err.message, 'bad');
+    });
+  }
+
+  // ------------------------------------------------------------- 健康度（/health 在根路径，不在 /api/v1 下）
+  function refreshHealthRoot() {
+    return fetch('/health')
+      .then(function (res) { return res.ok ? res.json() : Promise.reject(new Error('HTTP ' + res.status)); })
+      .then(function (data) {
+        setText('#versionChip', 'v' + (data.version || '?'));
+        ['mysql', 'qdrant', 'checkpointer'].forEach(function (name) {
+          var chip = document.querySelector('[data-health="' + name + '"]');
+          if (!chip) return;
+          var ok = !!(data[name] && data[name].ok);
+          chip.querySelector('.dot').className = 'dot ' + (ok ? 'dot--ok' : 'dot--bad');
+          chip.title = (data[name] && data[name].detail) || '';
+        });
+      })
+      .catch(function () {
+        ['mysql', 'qdrant', 'checkpointer'].forEach(function (name) {
+          var chip = document.querySelector('[data-health="' + name + '"]');
+          if (chip) chip.querySelector('.dot').className = 'dot dot--bad';
+        });
+        setText('#versionChip', '离线');
+      });
+  }
+
+  // ------------------------------------------------------------- 时钟与轮询
+  function tickClock() {
+    var now = new Date();
+    var pad = function (n) { return n < 10 ? '0' + n : String(n); };
+    setText('#clock', pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds()));
+  }
+
+  function startPolling() {
+    if (state.timer) clearInterval(state.timer);
+    state.timer = setInterval(function () {
+      if (document.hidden) return;
+      if (!$('#autoRefresh').checked) return;
+      if (state.busy) return;   // 有请求在途时不打扰
+      refreshRight(false);
+      refreshHealthRoot();
+    }, POLL_MS);
+  }
+
+  // ------------------------------------------------------------- 事件绑定
+  function bind() {
+    $('#btnE201').addEventListener('click', function () { runDiagnose('e201'); });
+    $('#btnE500').addEventListener('click', function () { runDiagnose('e500'); });
+    $('#btnCustom').addEventListener('click', function () { runDiagnose('custom'); });
+    $('#customQuery').addEventListener('keydown', function (ev) {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') runDiagnose('custom');
+    });
+
+    $('#btnRefresh').addEventListener('click', function () {
+      refreshRight(true);
+      refreshHealthRoot();
+      toast('看板已刷新');
+    });
+
+    // 备件筛选（输入防抖 300ms）
+    $('#partFilter').addEventListener('input', function () {
+      clearTimeout(partFilterTimer);
+      partFilterTimer = setTimeout(function () {
+        state.lastStock = {};
+        state.stockReady = false;
+        refreshRight(false);
+      }, 300);
+    });
+    $('#partFilter').addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') {
+        state.lastStock = {};
+        state.stockReady = false;
+        refreshRight(true);
+      }
+    });
+
+    // 快捷筛选
+    document.querySelectorAll('[data-part]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        $('#partFilter').value = btn.getAttribute('data-part') || '';
+        state.lastStock = {};
+        state.stockReady = false;
+        refreshRight(true);
+      });
+    });
+
+    // 审批
+    $('#btnApprove').addEventListener('click', function () { submitApproval('APPROVED'); });
+    $('#btnReject').addEventListener('click', function () { submitApproval('REJECTED'); });
+    $('#btnModalCancel').addEventListener('click', closeApproval);
+    $('#modalClose').addEventListener('click', closeApproval);
+    $('#approvalOverlay').addEventListener('click', function (ev) {
+      if (ev.target === $('#approvalOverlay')) closeApproval();
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && $('#approvalOverlay').classList.contains('is-open')) closeApproval();
+    });
+
+    // Tailwind CDN 不可达时给出提示（页面仍可用，只是失去工具类样式）
+    if (typeof window.tailwind === 'undefined') {
+      var warn = el('div', 'toast toast--bad',
+        'Tailwind CDN 不可达（内网隔离？）——布局与功能正常，视觉样式已降级。');
+      document.getElementById('toasts').appendChild(warn);
+    }
+  }
+
+  // ------------------------------------------------------------- 启动
+  document.addEventListener('DOMContentLoaded', function () {
+    tickClock();
+    setInterval(tickClock, 1000);
+    bind();
+    refreshHealthRoot();
+    refreshRight(false);
+    startPolling();
+  });
+})();
+</script>
+</body>
+</html>
